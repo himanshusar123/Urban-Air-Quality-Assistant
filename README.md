@@ -81,14 +81,14 @@ FastAPI ──► Validation (Pydantic) ──► Rate limit + security headers
 
 ## Testing
 
-65 automated tests, about 95 % line coverage:
+66 automated tests, about 97 % line coverage:
 
 | File | What it covers |
 |---|---|
 | `tests/test_aqi.py` | Every AQI band boundary, dominant-pollutant logic |
 | `tests/test_advisor.py` | Risk scoring, verdict thresholds, sensitivity and exertion effects, mask rules, best-window search (duration, night hours, contiguity) |
 | `tests/test_air_quality.py` | Payload parsing, geocoding, caching, HTTP 500 / bad JSON / timeouts (mocked with `respx`) |
-| `tests/test_explainer.py` | Gemini path, caching, failure fallback, truncation, prompt-injection escaping |
+| `tests/test_explainer.py` | Gemini path and SDK config (v1beta, thinking budget), caching, failure fallback, truncation, prompt-injection escaping |
 | `tests/test_api.py` | Endpoints, validation (422), unknown city (404), upstream failure (502), AI on/off |
 | `tests/test_security_and_cache.py` | Security headers, rate limiting (429), TTL/LRU cache, sanitisation, no key leakage |
 

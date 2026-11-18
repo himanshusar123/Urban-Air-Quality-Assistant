@@ -89,3 +89,34 @@ def test_prompt_escapes_tags_in_user_question() -> None:
     assert prompt.count("</question>") == 1
     assert '"language": "Hindi"' in prompt
     assert '"verdict"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_make_gemini_generate_config(monkeypatch) -> None:
+    from google import genai
+
+    from app.services.explainer import MAX_OUTPUT_TOKENS, make_gemini_generate
+
+    captured: dict = {}
+
+    class FakeModels:
+        async def generate_content(self, model, contents, config):
+            captured.update(model=model, contents=contents, config=config)
+            return type("Resp", (), {"text": "ok"})()
+
+    class FakeClient:
+        def __init__(self, api_key, http_options):
+            captured["api_version"] = http_options.api_version
+            self.aio = type("Aio", (), {"models": FakeModels()})()
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    generate = make_gemini_generate("test-key", "gemini-2.5-flash")
+    assert await generate("sys", "prompt") == "ok"
+    assert captured["api_version"] == "v1beta"
+    assert captured["config"].system_instruction == "sys"
+    assert captured["config"].max_output_tokens == MAX_OUTPUT_TOKENS
+    assert captured["config"].thinking_config.thinking_budget == 0
+
+    other = make_gemini_generate("test-key", "gemini-3-flash")
+    await other("sys", "prompt")
+    assert captured["config"].thinking_config is None

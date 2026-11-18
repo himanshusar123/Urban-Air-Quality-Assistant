@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 GenerateFn = Callable[[str, str], Awaitable[str]]
 
 MAX_EXPLANATION_CHARS = 1500
+MAX_OUTPUT_TOKENS = 1024  # Hindi (Devanagari) uses more tokens per word than English
 
 SYSTEM_INSTRUCTION = """You are AirWise, a calm, practical urban air-quality assistant.
 Rules:
@@ -136,7 +137,8 @@ class Explainer:
         try:
             text = (await self._generate(SYSTEM_INSTRUCTION, prompt)).strip()
         except Exception as exc:  # noqa: BLE001 - any AI failure must degrade gracefully
-            logger.warning("Gemini call failed: %s", type(exc).__name__)
+            # Log the provider's message (never the key) so failures are diagnosable.
+            logger.warning("Gemini call failed: %s: %s", type(exc).__name__, str(exc)[:300])
             return fallback_explanation(facts, decision), False
         if not text:
             return fallback_explanation(facts, decision), False
@@ -151,7 +153,11 @@ def make_gemini_generate(api_key: str, model: str) -> GenerateFn:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    # v1beta supports system instructions and thinking config for every Gemini model.
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(api_version="v1beta"))
+    # A short explanation needs no extended reasoning; on 2.5 models thinking
+    # tokens would otherwise eat the output budget and truncate the answer.
+    thinking = types.ThinkingConfig(thinking_budget=0) if model.startswith("gemini-2.5") else None
 
     async def generate(system_instruction: str, prompt: str) -> str:
         response = await client.aio.models.generate_content(
@@ -160,7 +166,8 @@ def make_gemini_generate(api_key: str, model: str) -> GenerateFn:
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=0.4,
-                max_output_tokens=400,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+                thinking_config=thinking,
             ),
         )
         return response.text or ""
