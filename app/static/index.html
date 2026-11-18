@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AirWise: live air quality and personalised advice on when and how to go outside in your city.">
+  <title>AirWise – Urban Air Quality Assistant</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="site-header">
+    <h1>AirWise <span class="tagline">Urban Air Quality Assistant</span></h1>
+    <p>Live air quality for your city, turned into clear advice for you and your plans.</p>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section aria-labelledby="form-title" class="card">
+      <h2 id="form-title">Plan your time outdoors</h2>
+      <form id="advice-form" novalidate>
+        <div class="field">
+          <label for="city">City</label>
+          <input id="city" name="city" type="text" autocomplete="address-level2"
+                 maxlength="80" placeholder="e.g. Delhi, Mumbai, London" aria-describedby="city-hint">
+          <p id="city-hint" class="hint">Or use your current location instead.</p>
+          <button type="button" id="locate-btn" class="secondary">Use my location</button>
+          <p id="locate-status" class="hint" role="status"></p>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="profile">Who is this advice for?</label>
+            <select id="profile" name="profile">
+              <option value="general">Healthy adult</option>
+              <option value="child">Child</option>
+              <option value="elderly">Older adult (65+)</option>
+              <option value="pregnant">Pregnant</option>
+              <option value="respiratory">Asthma or lung condition</option>
+              <option value="heart">Heart condition</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="activity">Planned activity</label>
+            <select id="activity" name="activity">
+              <option value="walk">Walk</option>
+              <option value="commute">Commute</option>
+              <option value="run">Run</option>
+              <option value="cycle">Cycle</option>
+              <option value="kids_play">Kids playing outside</option>
+              <option value="outdoor_work">Outdoor work</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label for="duration">Duration (minutes)</label>
+            <input id="duration" name="duration" type="number" min="5" max="480" step="5" value="30" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="language">Answer language</label>
+            <select id="language" name="language">
+              <option value="en">English</option>
+              <option value="hi">हिन्दी (Hindi)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="question">Anything else to ask? <span class="optional">(optional)</span></label>
+          <textarea id="question" name="question" rows="2" maxlength="300"
+                    placeholder="e.g. Is it safe to open the windows tonight?"></textarea>
+        </div>
+
+        <p id="form-error" class="error" role="alert" hidden></p>
+        <button type="submit" id="submit-btn">Get my advice</button>
+      </form>
+    </section>
+
+    <section id="result" class="card" aria-labelledby="result-title" aria-live="polite" aria-busy="false" hidden>
+      <h2 id="result-title" tabindex="-1">Your air-quality advice</h2>
+      <div class="aqi-summary">
+        <div id="aqi-badge" class="aqi-badge" role="img" aria-label="">
+          <span id="aqi-value" class="aqi-value"></span>
+          <span class="aqi-unit">US AQI</span>
+        </div>
+        <div>
+          <p id="location" class="location"></p>
+          <p id="category" class="category"></p>
+          <p id="category-msg"></p>
+        </div>
+      </div>
+
+      <div id="verdict" class="verdict">
+        <h3 id="headline"></h3>
+        <p>Personal risk score: <strong id="risk"></strong> / 100</p>
+        <meter id="risk-meter" min="0" max="100" low="25" high="70" optimum="0" aria-labelledby="risk"></meter>
+      </div>
+
+      <h3>What this means</h3>
+      <p id="explanation"></p>
+      <p id="ai-note" class="hint"></p>
+
+      <h3>What to do</h3>
+      <ul id="actions"></ul>
+      <p><strong>Mask:</strong> <span id="mask"></span></p>
+      <p id="window"></p>
+
+      <h3>At home</h3>
+      <ul id="indoor"></ul>
+
+      <details>
+        <summary>Pollutant levels and 24-hour forecast</summary>
+        <table>
+          <caption>Current pollutant concentrations (µg/m³)</caption>
+          <thead><tr><th scope="col">Pollutant</th><th scope="col">Level</th></tr></thead>
+          <tbody id="pollutants"></tbody>
+        </table>
+        <table>
+          <caption>Hourly AQI forecast</caption>
+          <thead><tr><th scope="col">Time</th><th scope="col">AQI</th><th scope="col">Category</th></tr></thead>
+          <tbody id="forecast"></tbody>
+        </table>
+      </details>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Data: <a href="https://open-meteo.com/" rel="noopener noreferrer">Open-Meteo Air Quality API</a> (CAMS). Explanations by Google Gemini.
+      This is general guidance, not medical advice.</p>
+  </footer>
+</body>
+</html>
