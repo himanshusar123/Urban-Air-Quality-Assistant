@@ -14,14 +14,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from app.cache import TTLCache
-from app.schemas import (
-    Activity,
-    AirSnapshot,
-    AqiCategory,
-    Decision,
-    HealthProfile,
-    Language,
-)
+from app.schemas import AirSnapshot, AqiCategory, Decision, Language, UserContext
 from app.services.advisor import ACTIVITY_LABEL
 from app.services.aqi import POLLUTANT_NAMES
 
@@ -48,33 +41,29 @@ LANGUAGE_NAMES = {Language.ENGLISH: "English", Language.HINDI: "Hindi"}
 
 
 def build_facts(
-    air: AirSnapshot,
-    category: AqiCategory,
-    decision: Decision,
-    profile: HealthProfile,
-    activity: Activity,
-    minutes: int,
-    language: Language,
+    air: AirSnapshot, category: AqiCategory, decision: Decision, ctx: UserContext
 ) -> dict[str, object]:
+    """Collect the only facts Gemini is allowed to talk about."""
     return {
         "location": air.location_name,
         "local_time": air.observed_at,
         "us_aqi": air.aqi,
         "category": category.label,
         "dominant_pollutant": POLLUTANT_NAMES.get(decision.dominant_pollutant or "", None),
-        "person": profile.value,
-        "activity": ACTIVITY_LABEL[activity],
-        "duration_minutes": minutes,
-        "verdict": decision.verdict,
+        "person": ctx.profile.value,
+        "activity": ACTIVITY_LABEL[ctx.activity],
+        "duration_minutes": ctx.duration_minutes,
+        "verdict": decision.verdict.value,
         "risk_score_0_100": decision.risk_score,
         "mask": decision.mask,
         "actions": decision.actions,
         "cleaner_time_window": decision.best_window.model_dump() if decision.best_window else None,
-        "language": LANGUAGE_NAMES[language],
+        "language": LANGUAGE_NAMES[ctx.language],
     }
 
 
 def build_prompt(facts: dict[str, object], question: str | None) -> str:
+    """Build the user prompt, fencing the untrusted question inside <question> tags."""
     safe_question = (question or "").replace("<", "‹").replace(">", "›")
     return (
         "FACTS:\n"
@@ -104,6 +93,8 @@ def fallback_explanation(facts: dict[str, object], decision: Decision) -> str:
 
 
 class Explainer:
+    """Explains a decision with Gemini, falling back to a template when AI is unavailable."""
+
     def __init__(self, generate: GenerateFn | None, cache_ttl_seconds: int = 600) -> None:
         self._generate = generate
         self._cache: TTLCache[str] = TTLCache(cache_ttl_seconds, max_entries=256)
@@ -117,18 +108,14 @@ class Explainer:
         air: AirSnapshot,
         category: AqiCategory,
         decision: Decision,
-        profile: HealthProfile,
-        activity: Activity,
-        minutes: int,
-        question: str | None,
-        language: Language,
+        ctx: UserContext,
     ) -> tuple[str, bool]:
         """Return (explanation, ai_generated)."""
-        facts = build_facts(air, category, decision, profile, activity, minutes, language)
+        facts = build_facts(air, category, decision, ctx)
         if self._generate is None:
             return fallback_explanation(facts, decision), False
 
-        prompt = build_prompt(facts, question)
+        prompt = build_prompt(facts, ctx.question)
         key = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         cached = self._cache.get(key)
         if cached is not None:

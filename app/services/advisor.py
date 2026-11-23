@@ -18,6 +18,8 @@ from app.schemas import (
     Decision,
     HealthProfile,
     HourlyPoint,
+    UserContext,
+    Verdict,
 )
 from app.services.aqi import categorize, dominant_pollutant
 
@@ -54,7 +56,22 @@ ACTIVITY_LABEL: dict[Activity, str] = {
 DAYTIME_START_HOUR = 6
 DAYTIME_END_HOUR = 21
 
-VERDICT_THRESHOLDS: tuple[tuple[int, str], ...] = ((25, "go"), (45, "caution"), (70, "limit"))
+# Risk-score upper bounds (exclusive) for each verdict; anything above is "avoid".
+VERDICT_THRESHOLDS: tuple[tuple[int, Verdict], ...] = (
+    (25, Verdict.GO),
+    (45, Verdict.CAUTION),
+    (70, Verdict.LIMIT),
+)
+HAZARDOUS_AQI = 300  # always "avoid", whatever the personal risk score says
+MAX_AQI = 500  # upper end of the US AQI scale
+# Only suggest another time if it is at least this much cleaner than right now.
+MIN_WINDOW_IMPROVEMENT = 10
+
+# Mask guidance thresholds (US AQI).
+MASK_STRONG_AQI = 200
+MASK_RECOMMENDED_AQI = 150
+MASK_SENSITIVE_AQI = 100
+MASK_OPTIONAL_AQI = 50
 
 
 def duration_factor(minutes: int) -> float:
@@ -70,32 +87,61 @@ def duration_factor(minutes: int) -> float:
 
 def risk_score(aqi: int, profile: HealthProfile, activity: Activity, minutes: int) -> int:
     """Combine AQI, sensitivity, exertion and duration into a 0-100 score."""
-    base = min(max(aqi, 0), 500) / 300 * 100
+    base = min(max(aqi, 0), MAX_AQI) / HAZARDOUS_AQI * 100
     score = base * SENSITIVITY[profile] * EXERTION[activity] * duration_factor(minutes)
     return int(round(min(100.0, score)))
 
 
-def verdict_for(score: int, aqi: int) -> str:
+def verdict_for(score: int, aqi: int) -> Verdict:
     """Map a risk score to a verdict. Hazardous air is always 'avoid'."""
-    if aqi > 300:
-        return "avoid"
+    if aqi > HAZARDOUS_AQI:
+        return Verdict.AVOID
     for threshold, verdict in VERDICT_THRESHOLDS:
         if score < threshold:
             return verdict
-    return "avoid"
+    return Verdict.AVOID
 
 
 def mask_advice(aqi: int, sensitive: bool) -> str:
-    if aqi > 200:
+    """Say whether a mask is needed, and which kind actually helps."""
+    if aqi > MASK_STRONG_AQI:
         return (
             "A well-fitted N95/FFP2 respirator is strongly recommended; "
             "cloth and surgical masks do not filter fine particles well."
         )
-    if aqi > 150 or (sensitive and aqi > 100):
+    if aqi > MASK_RECOMMENDED_AQI or (sensitive and aqi > MASK_SENSITIVE_AQI):
         return "Wear a well-fitted N95/FFP2 mask outdoors."
-    if sensitive and aqi > 50:
+    if sensitive and aqi > MASK_OPTIONAL_AQI:
         return "Optional: carry an N95 mask in case conditions worsen."
     return "No mask needed for air quality."
+
+
+def _parse_forecast(forecast: list[HourlyPoint]) -> list[tuple[datetime, int]]:
+    """Parse forecast timestamps, silently skipping malformed ones."""
+    parsed: list[tuple[datetime, int]] = []
+    for point in forecast:
+        try:
+            parsed.append((datetime.fromisoformat(point.time), point.aqi))
+        except ValueError:
+            continue
+    return parsed
+
+
+def _is_contiguous(window: list[tuple[datetime, int]]) -> bool:
+    """True if consecutive points are exactly one hour apart."""
+    return all(
+        later[0] - earlier[0] == timedelta(hours=1)
+        for earlier, later in zip(window, window[1:], strict=False)
+    )
+
+
+def _is_daytime(start: datetime, end: datetime) -> bool:
+    """True if the window starts after waking time and ends the same day before bedtime."""
+    return (
+        start.hour >= DAYTIME_START_HOUR
+        and end.hour <= DAYTIME_END_HOUR
+        and end.date() == start.date()
+    )
 
 
 def best_window(forecast: list[HourlyPoint], minutes: int) -> BestWindow | None:
@@ -105,24 +151,13 @@ def best_window(forecast: list[HourlyPoint], minutes: int) -> BestWindow | None:
     whole hours). Windows must be contiguous hourly points.
     """
     hours = max(1, math.ceil(minutes / 60))
-    parsed: list[tuple[datetime, int]] = []
-    for point in forecast:
-        try:
-            parsed.append((datetime.fromisoformat(point.time), point.aqi))
-        except ValueError:
-            continue
+    parsed = _parse_forecast(forecast)
 
     best: tuple[float, datetime, datetime] | None = None
     for i in range(len(parsed) - hours + 1):
         window = parsed[i : i + hours]
         start, end = window[0][0], window[-1][0] + timedelta(hours=1)
-        contiguous = all(
-            window[j + 1][0] - window[j][0] == timedelta(hours=1) for j in range(hours - 1)
-        )
-        in_daytime = start.hour >= DAYTIME_START_HOUR and (
-            end.hour <= DAYTIME_END_HOUR and end.date() == start.date()
-        )
-        if not (contiguous and in_daytime):
+        if not (_is_contiguous(window) and _is_daytime(start, end)):
             continue
         avg = sum(aqi for _, aqi in window) / hours
         if best is None or avg < best[0]:
@@ -134,18 +169,18 @@ def best_window(forecast: list[HourlyPoint], minutes: int) -> BestWindow | None:
     return BestWindow(
         start=start.isoformat(timespec="minutes"),
         end=end.isoformat(timespec="minutes"),
-        average_aqi=int(round(avg)),
+        average_aqi=round(avg),
     )
 
 
-def _actions(verdict: str, activity: Activity, sensitive: bool) -> list[str]:
+def _actions(verdict: Verdict, activity: Activity, sensitive: bool) -> list[str]:
     label = ACTIVITY_LABEL[activity]
-    if verdict == "go":
+    if verdict is Verdict.GO:
         return [
             f"Conditions are fine for {label}. Enjoy it!",
             "Stay hydrated and check again if your plans change by several hours.",
         ]
-    if verdict == "caution":
+    if verdict is Verdict.CAUTION:
         actions = [
             f"{label.capitalize()} is okay, but keep the intensity moderate.",
             "Prefer parks and side streets over busy main roads.",
@@ -153,7 +188,7 @@ def _actions(verdict: str, activity: Activity, sensitive: bool) -> list[str]:
         if sensitive:
             actions.append("Keep any prescribed inhaler or medication with you.")
         return actions
-    if verdict == "limit":
+    if verdict is Verdict.LIMIT:
         actions = [
             f"Shorten your {label} or move it indoors if possible.",
             "Avoid traffic-heavy roads and rush hours (8–10 am, 6–9 pm).",
@@ -172,6 +207,7 @@ def _actions(verdict: str, activity: Activity, sensitive: bool) -> list[str]:
 
 
 def _indoor_tips(level: int) -> list[str]:
+    """Home advice by AQI category level (1 = Good .. 6 = Hazardous)."""
     tips = ["Ventilate your home when the AQI is lowest, usually early afternoon."]
     if level >= 3:
         tips = [
@@ -183,33 +219,32 @@ def _indoor_tips(level: int) -> list[str]:
     return tips
 
 
-def _headline(verdict: str, activity: Activity) -> str:
+def _headline(verdict: Verdict, activity: Activity) -> str:
     label = ACTIVITY_LABEL[activity]
     return {
-        "go": f"Good to go for {label}",
-        "caution": f"{label.capitalize()} is okay with some care",
-        "limit": f"Limit {label} today",
-        "avoid": f"Skip outdoor {label} for now",
+        Verdict.GO: f"Good to go for {label}",
+        Verdict.CAUTION: f"{label.capitalize()} is okay with some care",
+        Verdict.LIMIT: f"Limit {label} today",
+        Verdict.AVOID: f"Skip outdoor {label} for now",
     }[verdict]
 
 
-def decide(air: AirSnapshot, profile: HealthProfile, activity: Activity, minutes: int) -> Decision:
+def decide(air: AirSnapshot, ctx: UserContext) -> Decision:
     """Produce the full recommendation for this user and moment."""
-    sensitive = profile is not HealthProfile.GENERAL
-    score = risk_score(air.aqi, profile, activity, minutes)
+    sensitive = ctx.profile is not HealthProfile.GENERAL
+    score = risk_score(air.aqi, ctx.profile, ctx.activity, ctx.duration_minutes)
     verdict = verdict_for(score, air.aqi)
     level = categorize(air.aqi).level
-    window = best_window(air.forecast, minutes)
-    # Only suggest another time if it is meaningfully cleaner than now.
-    if window is not None and window.average_aqi > air.aqi - 10:
+    window = best_window(air.forecast, ctx.duration_minutes)
+    if window is not None and window.average_aqi > air.aqi - MIN_WINDOW_IMPROVEMENT:
         window = None
 
     return Decision(
         verdict=verdict,
-        headline=_headline(verdict, activity),
+        headline=_headline(verdict, ctx.activity),
         risk_score=score,
         mask=mask_advice(air.aqi, sensitive),
-        actions=_actions(verdict, activity, sensitive),
+        actions=_actions(verdict, ctx.activity, sensitive),
         indoor_tips=_indoor_tips(level),
         best_window=window,
         dominant_pollutant=dominant_pollutant(air.pollutants),

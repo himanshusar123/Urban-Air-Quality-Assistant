@@ -95,10 +95,11 @@ FastAPI ──► Validation (Pydantic) ──► Rate limit + security headers
 ```bash
 pip install -r requirements-dev.txt
 ruff check .
+mypy
 pytest --cov=app
 ```
 
-CI runs lint and tests on every push (`.github/workflows/ci.yml`).
+CI runs ruff, `mypy --strict`, tests (95% coverage gate), `pip-audit` and a Docker build on every push (`.github/workflows/ci.yml`).
 
 ## Run locally
 
@@ -106,8 +107,9 @@ CI runs lint and tests on every push (`.github/workflows/ci.yml`).
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 export GEMINI_API_KEY=your_key                       # optional; Windows: set GEMINI_API_KEY=...
-uvicorn app.main:app --reload
-# open http://localhost:8000  (API docs at /api/docs)
+export ENABLE_DOCS=1                                 # optional: Swagger UI at /api/docs
+uvicorn app.main:create_app --factory --reload
+# open http://localhost:8000
 ```
 
 ## Deploy to Google Cloud Run
@@ -158,3 +160,28 @@ tests/                 Pytest suite
 - Advice is general guidance, **not medical advice**; the app says so in the UI and Gemini is instructed not to diagnose.
 - Without `GEMINI_API_KEY` the app still works fully, using template explanations (English).
 - Rate limiting and caches are in-memory per instance, which is fine for the Cloud Run demo scale; Redis or Memorystore would be used for multi-instance production.
+
+
+## Architecture
+
+```
+app/
+  main.py            app factory: middleware, lifespan, static files
+  routers/advice.py  /api/health and /api/advice (thin; no business logic)
+  errors.py          domain errors -> HTTP 404 / 502
+  schemas.py         validated request/response models (UserContext, Verdict, ...)
+  services/
+    air_quality.py   Open-Meteo geocoding + AQI client with TTL cache
+    advisor.py       deterministic rules engine (risk score, verdict, mask, best window)
+    explainer.py     Gemini explanation layer with template fallback
+    aqi.py           US EPA AQI bands and dominant pollutant
+  security.py        security headers, per-client rate limiting
+```
+
+The rules engine decides; Gemini only explains. Safety logic never depends on a model.
+
+## Limitations
+
+- The response cache and rate limiter are in memory and per instance, so with several Cloud Run instances limits apply per instance. Use Redis/Memorystore for shared state.
+- Swagger UI (`/api/docs`) is off by default because the strict CSP blocks its CDN assets; set `ENABLE_DOCS=1` for local use.
+- Advice is general guidance, not medical advice.

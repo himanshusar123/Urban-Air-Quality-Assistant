@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class HealthProfile(StrEnum):
@@ -30,8 +30,34 @@ class Activity(StrEnum):
 
 
 class Language(StrEnum):
+    """Languages the explanation can be written in."""
+
     ENGLISH = "en"
     HINDI = "hi"
+
+
+class Verdict(StrEnum):
+    """Overall go/no-go recommendation, from least to most restrictive."""
+
+    GO = "go"
+    CAUTION = "caution"
+    LIMIT = "limit"
+    AVOID = "avoid"
+
+
+class UserContext(BaseModel):
+    """Who is asking, what they plan to do and what they want to know.
+
+    Grouping these keeps the rules engine and the explainer signatures short.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    profile: HealthProfile = HealthProfile.GENERAL
+    activity: Activity = Activity.WALK
+    duration_minutes: int = Field(default=30, ge=5, le=480)
+    question: str | None = None
+    language: Language = Language.ENGLISH
 
 
 class AdviceRequest(BaseModel):
@@ -64,8 +90,21 @@ class AdviceRequest(BaseModel):
             raise ValueError("Latitude and longitude must be provided together.")
         return self
 
+    @property
+    def context(self) -> UserContext:
+        """The personal part of the request, without the location."""
+        return UserContext(
+            profile=self.profile,
+            activity=self.activity,
+            duration_minutes=self.duration_minutes,
+            question=self.question,
+            language=self.language,
+        )
+
 
 class Pollutants(BaseModel):
+    """Current concentrations in µg/m³ (``None`` when the provider has no value)."""
+
     pm2_5: float | None = None
     pm10: float | None = None
     ozone: float | None = None
@@ -75,8 +114,11 @@ class Pollutants(BaseModel):
 
 
 class HourlyPoint(BaseModel):
+    """One hour of the AQI forecast."""
+
     time: str
     aqi: int
+    category: str | None = None  # AQI category label, so clients need no copy of the bands
 
 
 class AirSnapshot(BaseModel):
@@ -93,6 +135,8 @@ class AirSnapshot(BaseModel):
 
 
 class AqiCategory(BaseModel):
+    """US EPA AQI band for a reading."""
+
     level: int  # 1 (Good) .. 6 (Hazardous)
     label: str
     color: str
@@ -100,6 +144,8 @@ class AqiCategory(BaseModel):
 
 
 class BestWindow(BaseModel):
+    """A cleaner daytime window, as local ISO timestamps."""
+
     start: str
     end: str
     average_aqi: int
@@ -108,7 +154,7 @@ class BestWindow(BaseModel):
 class Decision(BaseModel):
     """Deterministic, explainable recommendation from the rules engine."""
 
-    verdict: str  # "go" | "caution" | "limit" | "avoid"
+    verdict: Verdict
     headline: str
     risk_score: int = Field(ge=0, le=100)
     mask: str
@@ -119,6 +165,8 @@ class Decision(BaseModel):
 
 
 class AdviceResponse(BaseModel):
+    """Everything the UI needs to render one recommendation."""
+
     air: AirSnapshot
     category: AqiCategory
     decision: Decision

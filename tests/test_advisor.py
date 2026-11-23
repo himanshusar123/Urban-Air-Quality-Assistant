@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas import Activity, HealthProfile
+from app.schemas import Activity, HealthProfile, UserContext, Verdict
 from app.services.advisor import (
     best_window,
     decide,
@@ -13,17 +13,25 @@ from tests.conftest import make_air, make_forecast
 
 
 def test_clean_air_is_go_for_healthy_walker() -> None:
-    decision = decide(make_air(aqi=35), HealthProfile.GENERAL, Activity.WALK, 30)
-    assert decision.verdict == "go"
+    decision = decide(
+        make_air(aqi=35),
+        UserContext(profile=HealthProfile.GENERAL, activity=Activity.WALK, duration_minutes=30),
+    )
+    assert decision.verdict is Verdict.GO
     assert decision.mask == "No mask needed for air quality."
 
 
 def test_sensitive_runner_gets_stricter_advice_than_healthy_runner() -> None:
     air = make_air(aqi=120)
-    healthy = decide(air, HealthProfile.GENERAL, Activity.RUN, 45)
-    asthmatic = decide(air, HealthProfile.RESPIRATORY, Activity.RUN, 45)
+    healthy = decide(
+        air, UserContext(profile=HealthProfile.GENERAL, activity=Activity.RUN, duration_minutes=45)
+    )
+    asthmatic = decide(
+        air,
+        UserContext(profile=HealthProfile.RESPIRATORY, activity=Activity.RUN, duration_minutes=45),
+    )
     assert asthmatic.risk_score > healthy.risk_score
-    order = ["go", "caution", "limit", "avoid"]
+    order = list(Verdict)
     assert order.index(asthmatic.verdict) > order.index(healthy.verdict)
     assert "inhaler" not in " ".join(healthy.actions)
 
@@ -91,22 +99,37 @@ def test_best_window_none_when_no_data() -> None:
 
 def test_decide_only_suggests_meaningfully_cleaner_window() -> None:
     flat = make_air(aqi=150, forecast=make_forecast(8, [148, 149, 150, 151]))
-    assert decide(flat, HealthProfile.GENERAL, Activity.WALK, 30).best_window is None
+    assert (
+        decide(
+            flat,
+            UserContext(profile=HealthProfile.GENERAL, activity=Activity.WALK, duration_minutes=30),
+        ).best_window
+        is None
+    )
 
     improving = make_air(aqi=150, forecast=make_forecast(8, [150, 120, 70, 90]))
-    window = decide(improving, HealthProfile.GENERAL, Activity.WALK, 30).best_window
+    window = decide(
+        improving,
+        UserContext(profile=HealthProfile.GENERAL, activity=Activity.WALK, duration_minutes=30),
+    ).best_window
     assert window is not None and window.average_aqi == 70
 
 
 def test_decide_reports_dominant_pollutant_and_indoor_tips() -> None:
-    decision = decide(make_air(aqi=210, pm2_5=120.0), HealthProfile.CHILD, Activity.KIDS_PLAY, 60)
-    assert decision.verdict == "avoid"
+    decision = decide(
+        make_air(aqi=210, pm2_5=120.0),
+        UserContext(profile=HealthProfile.CHILD, activity=Activity.KIDS_PLAY, duration_minutes=60),
+    )
+    assert decision.verdict is Verdict.AVOID
     assert decision.dominant_pollutant == "pm2_5"
     assert any("HEPA" in tip for tip in decision.indoor_tips)
     assert any("incense" in tip for tip in decision.indoor_tips)
 
 
 def test_limit_verdict_suggests_indoor_workout_for_runners() -> None:
-    decision = decide(make_air(aqi=100), HealthProfile.RESPIRATORY, Activity.RUN, 30)
-    assert decision.verdict == "limit"
+    decision = decide(
+        make_air(aqi=100),
+        UserContext(profile=HealthProfile.RESPIRATORY, activity=Activity.RUN, duration_minutes=30),
+    )
+    assert decision.verdict is Verdict.LIMIT
     assert any("indoor session" in action for action in decision.actions)

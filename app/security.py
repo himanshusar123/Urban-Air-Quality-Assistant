@@ -26,6 +26,8 @@ SECURITY_HEADERS: dict[str, str] = {
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add hardening headers to every response and disable caching of API responses."""
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         for name, value in SECURITY_HEADERS.items():
@@ -36,18 +38,36 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class SlidingWindowRateLimiter:
-    """Allow at most ``limit`` requests per ``window`` seconds per key."""
+    """Allow at most ``limit`` requests per ``window`` seconds per key.
+
+    State is per process. Idle keys are swept once ``max_keys`` is exceeded, so
+    memory stays bounded however many distinct clients connect.
+    """
 
     def __init__(
-        self, limit: int, window: float = 60.0, clock: Callable[[], float] = time.monotonic
+        self,
+        limit: int,
+        window: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+        max_keys: int = 10_000,
     ) -> None:
         self.limit = limit
         self.window = window
         self._clock = clock
+        self._max_keys = max_keys
         self._hits: defaultdict[str, deque[float]] = defaultdict(deque)
 
+    def _sweep(self, now: float) -> None:
+        """Drop keys whose most recent hit is outside the window."""
+        stale = [k for k, hits in self._hits.items() if not hits or now - hits[-1] >= self.window]
+        for key in stale:
+            del self._hits[key]
+
     def allow(self, key: str) -> bool:
+        """Record a request for ``key`` and say whether it is within the limit."""
         now = self._clock()
+        if len(self._hits) > self._max_keys:
+            self._sweep(now)
         hits = self._hits[key]
         while hits and now - hits[0] >= self.window:
             hits.popleft()

@@ -81,3 +81,13 @@ def test_api_key_never_leaks_in_health(monkeypatch) -> None:
     )
     with TestClient(app) as test_client:
         assert "secret-key-123" not in test_client.get("/api/health").text
+
+
+def test_rate_limiter_sweeps_idle_clients() -> None:
+    now = [0.0]
+    limiter = SlidingWindowRateLimiter(limit=5, window=60, clock=lambda: now[0], max_keys=3)
+    for i in range(4):
+        assert limiter.allow(f"client-{i}")
+    now[0] = 120.0  # all earlier clients are now idle
+    assert limiter.allow("fresh-client")
+    assert len(limiter._hits) == 1

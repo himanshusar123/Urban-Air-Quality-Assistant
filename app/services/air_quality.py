@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from app.cache import TTLCache
 from app.config import Settings
 from app.schemas import AirSnapshot, HourlyPoint, Pollutants
+from app.services.aqi import categorize
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class UpstreamError(Exception):
 
 
 class AirQualityService:
+    """Fetches and caches live air quality for a place, via Open-Meteo."""
+
     def __init__(self, client: httpx.AsyncClient, settings: Settings) -> None:
         self._client = client
         self._settings = settings
@@ -60,7 +63,7 @@ class AirQualityService:
         key = f"geo:{city.casefold()}"
         cached = self._cache.get(key)
         if cached is not None:
-            return cached
+            return cast("tuple[str, float, float]", cached)
 
         data = await self._get_json(
             self._settings.geocoding_url,
@@ -97,6 +100,19 @@ class AirQualityService:
         return parse_snapshot(cached, lat, lon, name)
 
 
+def _parse_forecast(hourly: dict[str, Any], observed_at: str) -> list[HourlyPoint]:
+    """Turn Open-Meteo's parallel ``time``/``us_aqi`` arrays into upcoming hourly points."""
+    times = hourly.get("time") or []
+    values = hourly.get("us_aqi") or []
+    points: list[HourlyPoint] = []
+    for time, value in zip(times, values, strict=False):
+        if value is None or time < observed_at:
+            continue
+        aqi = round(value)
+        points.append(HourlyPoint(time=time, aqi=aqi, category=categorize(aqi).label))
+    return points[:FORECAST_HOURS]
+
+
 def parse_snapshot(data: dict[str, Any], lat: float, lon: float, name: str) -> AirSnapshot:
     """Convert a raw Open-Meteo payload into an :class:`AirSnapshot`."""
     current = data.get("current") or {}
@@ -105,22 +121,13 @@ def parse_snapshot(data: dict[str, Any], lat: float, lon: float, name: str) -> A
     if aqi is None or observed_at is None:
         raise UpstreamError("No current air-quality reading is available for this location.")
 
-    hourly = data.get("hourly") or {}
-    times = hourly.get("time") or []
-    values = hourly.get("us_aqi") or []
-    forecast = [
-        HourlyPoint(time=t, aqi=int(round(v)))
-        for t, v in zip(times, values, strict=False)
-        if v is not None and t >= observed_at
-    ][:FORECAST_HOURS]
-
     return AirSnapshot(
         location_name=name,
         latitude=lat,
         longitude=lon,
         timezone=str(data.get("timezone", "UTC")),
         observed_at=observed_at,
-        aqi=int(round(aqi)),
+        aqi=round(aqi),
         pollutants=Pollutants(**{f: current.get(f) for f in POLLUTANT_FIELDS}),
-        forecast=forecast,
+        forecast=_parse_forecast(data.get("hourly") or {}, observed_at),
     )

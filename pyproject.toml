@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
 
 [tool.coverage.run]
@@ -22,3 +23,13 @@ ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+files = ["app"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true

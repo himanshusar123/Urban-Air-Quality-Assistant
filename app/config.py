@@ -23,6 +23,11 @@ def _int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _bool_env(name: str) -> bool:
+    """Read a boolean flag (1/true/yes/on) from the environment; unset means False."""
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime configuration."""
@@ -42,6 +47,8 @@ class Settings:
             o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
         )
     )
+
+    enable_docs: bool = field(default_factory=lambda: _bool_env("ENABLE_DOCS"))
 
     @property
     def ai_enabled(self) -> bool:
